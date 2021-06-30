@@ -12,8 +12,10 @@ pub fn run(database: PgDatabase) -> codegen::Scope {
     let mut scope = codegen::Scope::new();
 
     scope.import("enum_map", "*");
-    scope.import("super", "{PgConnection, PgResult}");
+    scope.import("super", "{PgResult, PgError}");
     scope.import("postgres_mapper", "FromPostgresRow");
+	//scope.import("postgres_types", "{ToSql, FromSql}");
+	scope.import("rocket::form", "FromFormField");
 
     // Generate the types
     for (_oid, type_def) in &database.types {
@@ -24,11 +26,10 @@ pub fn run(database: PgDatabase) -> codegen::Scope {
     }
 
     // Generate the functions
-    let fimpl = scope.new_impl("PgConnection");
     for (_oid, func_def) in &database.functions {
         match gen_function(&database.types, func_def) {
             Ok(new_func) => {
-                fimpl.push_fn(new_func);
+                scope.push_fn(new_func);
             }
             Err(e) => {
                 eprintln!("{}", e);
@@ -78,7 +79,7 @@ fn gen_enum(scope: &mut codegen::Scope, schema: &String, name: &String, values: 
     new_enum.derive("Deserialize");
     new_enum.derive("ToSql");
     new_enum.derive("FromSql");
-    new_enum.derive("FromFormValue");
+    new_enum.derive("FromFormField");
     new_enum.derive("Enum");
 
     // Add the annotation
@@ -169,7 +170,7 @@ fn gen_function(database: &BTreeMap<Oid, PgType>, func_def: &PgFunction) -> Resu
     new_func.vis("pub");
 
     // Function arguments
-    new_func.arg_ref_self();
+    new_func.arg("db", "&mut postgres::Client");
     for arg in &func_def.arguments {
         let arg_type = resolve_arg_type(&database, arg.typ)?;
         new_func.arg(&gen_arg_name(&arg.name), arg_type);
@@ -206,19 +207,19 @@ fn gen_function(database: &BTreeMap<Oid, PgType>, func_def: &PgFunction) -> Resu
     match (func_def.kind, &func_def.returns) {
         (PgProcedureKind::Function, PgReturn::Void) => {
             new_func.line(format!(
-                "let _query = self.query(\"SELECT * FROM \\\"{}\\\".\\\"{}\\\"({})\", &[{}])?;",
+                "let _query = db.query(\"SELECT * FROM \\\"{}\\\".\\\"{}\\\"({})\", &[{}])?;",
                 &func_def.schema, &func_def.name, &pg_args, &rs_args
             ));
         }
         (PgProcedureKind::Function, _) => {
             new_func.line(format!(
-                "let query = self.query(\"SELECT * FROM \\\"{}\\\".\\\"{}\\\"({})\", &[{}])?;",
+                "let query = db.query(\"SELECT * FROM \\\"{}\\\".\\\"{}\\\"({})\", &[{}])?;",
                 &func_def.schema, &func_def.name, &pg_args, &rs_args
             ));
         }
         (PgProcedureKind::Proc, _) => {
             new_func.line(format!(
-                "let _query = self.query(\"CALL \\\"{}\\\".\\\"{}\\\"({})\", &[{}])?;",
+                "let _query = db.query(\"CALL \\\"{}\\\".\\\"{}\\\"({})\", &[{}])?;",
                 &func_def.schema, &func_def.name, &pg_args, &rs_args
             ));
         }
@@ -237,7 +238,7 @@ fn gen_function(database: &BTreeMap<Oid, PgType>, func_def: &PgFunction) -> Resu
         }
         // Returns a single scalar (may actually be a composite)
         (PgReturn::Scalar(typ), false) => {
-            new_func.line("let row = query.into_iter().next()?;");
+            new_func.line("let row = query.into_iter().next().ok_or(PgError::KeyNotFound)?;");
             match database.get(&typ).ok_or("Unknown return type")? {
                 PgType::Composite { schema, name, .. } => {
                     new_func.line(format!("let result = {}::from_postgres_row(row)?;", gen_type_name(schema, name)));
@@ -264,7 +265,7 @@ fn gen_function(database: &BTreeMap<Oid, PgType>, func_def: &PgFunction) -> Resu
         },
         // Returns a single record (anonymous composite)
         (PgReturn::Record(r), false) => {
-            new_func.line(format!("let row = query.into_iter().next()?;"));
+            new_func.line(format!("let row = query.into_iter().next().ok_or(PgError::KeyNotFound)?;"));
             let foo = r
                 .iter()
                 .map(|ret| format!("row.get(\\\"{}\\\")", ret.name))

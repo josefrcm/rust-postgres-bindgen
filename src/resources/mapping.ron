@@ -9,7 +9,7 @@
     "date" : (rs_type: "chrono::NaiveDate", copyable: true, serializable: true),
     "float4" : (rs_type: "f32", copyable: true, serializable: true),
     "float8" : (rs_type: "f64", copyable: true, serializable: true),
-    "inet" : (rs_type: "postgres_inet::MaskedIpAddr", copyable: true, serializable: false),
+    "inet" : (rs_type: "std::net::IpAddr", copyable: true, serializable: false),
     "int2" : (rs_type: "i16", copyable: true, serializable: true),
     "int4" : (rs_type: "i32", copyable: true, serializable: true),
     "int8" : (rs_type: "i64", copyable: true, serializable: true),
